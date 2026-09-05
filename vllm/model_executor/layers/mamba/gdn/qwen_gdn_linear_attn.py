@@ -1787,7 +1787,7 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
 
             if (
                 on_gfx10x()
-                and os.environ.get("VLLM_GDN_DECODE_RDNA2", "1") != "0"
+                and os.environ.get("VLLM_GDN_DECODE_RDNA2", "0") == "1"
                 and hasattr(torch.ops, "_rocm_C")
                 and hasattr(torch.ops._rocm_C, "gdn_decode_rdna2")
             ):

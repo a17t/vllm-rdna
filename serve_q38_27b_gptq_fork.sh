@@ -39,7 +39,7 @@ exec /mnt/Dev/vllm-rdna2/venv/bin/vllm serve btbtyler09/Qwen3.8-27B-GPTQ-4bit \
     --kv-cache-dtype int8_per_token_head \
     --linear-backend exllama \
     --tensor-parallel-size 2 \
-    --max-model-len 131072 \
+    --max-model-len 262144 \
     --max-num-seqs 8 \
     --max-num-batched-tokens 8192 \
     --enable-chunked-prefill \

@@ -161,7 +161,7 @@ void moe_awq_gemm_rdna2(torch::Tensor a, torch::Tensor c,
                         torch::Tensor num_tokens_post_padded, int64_t top_k,
                         int64_t block_size_m, bool mul_topk_weight,
                         int64_t output_topk);
-}.
+
 void exl3_gemm_rdna2(torch::Tensor a, torch::Tensor c, torch::Tensor trellis,
                      int64_t bits, int64_t cb);
 

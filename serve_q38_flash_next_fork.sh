@@ -27,19 +27,17 @@
 # id in requests). Text-only quality is unchanged.
 # Modes (env overrides):
 #   MTP=N   speculative tokens (default 3; 0 disables)
-#   CTX=N   max-model-len (default 32768; 65536/131072 at 0.90 util,
-#           262144 auto-selects 0.95 util. Do NOT combine with small
+#   CTX=N   max-model-len (default 262144, the native max, at 0.98 util;
+#           32768/65536/131072 also validated. Do NOT combine with small
 #           --max-num-seqs <=2 — dynamo query_start_loc crash.)
-#   MM=1    enable vision: drops --language-model-only/--skip-mm-profiling,
-#           adds --limit-mm-per-prompt image=1. NOTE: --served-model-name
-#           is not honored in MM mode; use the full repo id in requests.
-#   UTIL=N  override --gpu-memory-utilization (default 0.90, 0.95 at 256k)
+#   MM=0    disable vision (default: multimodal ON, unlimited images per
+#           prompt). In MM mode --served-model-name is not honored; use
+#           the full repo id in requests.
+#   UTIL=N  override --gpu-memory-utilization (default 0.98)
 MTP="${MTP:-3}"
-CTX="${CTX:-32768}"
-MM="${MM:-0}"
-if [ -z "${UTIL:-}" ]; then
-    if [ "${CTX}" -ge 262144 ]; then UTIL=0.95; else UTIL=0.90; fi
-fi
+CTX="${CTX:-262144}"
+MM="${MM:-1}"
+UTIL="${UTIL:-0.98}"
 export VLLM_PLE_MMAP=1
 export VLLM_USE_V2_MODEL_RUNNER=1
 export VLLM_ENGINE_READY_TIMEOUT_S=1200
@@ -57,7 +55,7 @@ SPEC_ARG=""
 
 MM_ARGS="--language-model-only --skip-mm-profiling"
 if [ "${MM}" != "0" ]; then
-    MM_ARGS="--limit-mm-per-prompt image=1"
+    MM_ARGS=""
 fi
 
 exec /mnt/Dev/vllm-rdna2/venv/bin/vllm serve btbtyler09/Qwen3.8-Flash-Next-GPTQ-4bit \

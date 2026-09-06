@@ -14,13 +14,17 @@
 #   - --linear-backend exllama is REQUIRED: auto-select picks
 #     RDNA2TritonW4A16 which wants a 95 GiB repack buffer (OOM on 32 GB)
 #
-# Required env:
-# - VLLM_PLE_MMAP=1: the ~82GB generated n-gram hash table lives in pinned
-#   host memory (UVA view); without it TP4 does not fit 32GB cards.
-# - VLLM_USE_V2_MODEL_RUNNER=1: PLE forward kwargs (ngram_context /
-#   query_start_loc) only exist on the V2 runner.
-# - PIECEWISE cudagraphs: the host-table PLE gather runs between graph
-#   pieces (FULL capture cannot replay host gathers).
+# Context length (2026-09-06): 64k (pool 205k tok, 3.1x), 128k (224k, 1.7x),
+# and the native 262144 all work at full speed (decode 23.7-26.6 = baseline
+# noise). 256k needs --gpu-memory-utilization 0.95. CAVEAT: do NOT combine
+# small --max-num-seqs (<=2) with this model — dynamo 0/1-dim specialization
+# on query_start_loc crashes with ConstraintViolationError.
+#
+# Multimodality (2026-09-06): works. Drop --language-model-only and
+# --skip-mm-profiling (optionally add --limit-mm-per-prompt image=1);
+# image captioning is correct, works with MTP=3 and at 17k+ token contexts.
+# Quirk: in MM mode --served-model-name is not honored (use the full repo
+# id in requests). Text-only quality is unchanged.
 MTP="${MTP:-3}"
 export VLLM_PLE_MMAP=1
 export VLLM_USE_V2_MODEL_RUNNER=1

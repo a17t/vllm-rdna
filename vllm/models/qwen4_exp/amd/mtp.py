@@ -136,6 +136,16 @@ def _make_draft_vllm_config(
                 "exclude_modules",
                 _remap_ignored_layers(exclude_modules, mtp_start_layer_idx),
             )
+        # Mixed-quant checkpoints (gptqmodel) ship the MTP layer's routed
+        # experts in BF16 while the base config is GPTQ; exclude them from
+        # the draft's quantized init so the unquantized loader path runs.
+        dynamic = getattr(draft_quant_config, "dynamic", None)
+        if isinstance(dynamic, dict):
+            if not any(
+                isinstance(p, str) and "mlp.experts" in p
+                for p in dynamic
+            ):
+                dynamic["-:.*mlp\\.experts"] = {}
 
     draft_vllm_config = replace(
         vllm_config,

@@ -1,11 +1,18 @@
 #!/bin/bash
 # Fork recipe: btbtyler09/Qwen3.8-Flash-Next-GPTQ-4bit (qwen4_exp) on 4x
-# Radeon PRO V620 (gfx1030). Measured 2026-09-06 TP4 cards 0-3:
+# Radeon PRO V620 (gfx1030). Measured 2026-09-06 TP4 cards 0-3 (150 W caps):
 #   MTP=3 PIECEWISE: decode @3.7k 24.7 t/s, c1 79.9, c8 152.5
 #   (eager MTP=3: 10.5 t/s; eager no-MTP: 6.1)
 #   EP tested and rejected: --enable-expert-parallel loses on this PCIe
 #   host (19.4/-21% decode, 68.8/-14% c1, 129.2/-15% c8, greedy-clean) —
 #   matches the BM35 finding; keep experts TP-sharded.
+#   Parameter sweep 2026-09-06 — this recipe is the optimum of:
+#   - MTP k=2/k=4 lose (k=3: c1 79.9 vs 70.1/69.1; c8 152.5 vs 144.6/138.0;
+#     k=4 decode-only +3.7% not worth it)
+#   - 0.95 util + max-num-seqs 16 collapses c8 to 63.2 (-59%)
+#   - max-num-batched-tokens 8192 is a wash (-3.8% c1, -8% TTFT)
+#   - --linear-backend exllama is REQUIRED: auto-select picks
+#     RDNA2TritonW4A16 which wants a 95 GiB repack buffer (OOM on 32 GB)
 #
 # Required env:
 # - VLLM_PLE_MMAP=1: the ~82GB generated n-gram hash table lives in pinned

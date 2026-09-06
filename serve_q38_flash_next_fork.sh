@@ -3,6 +3,9 @@
 # Radeon PRO V620 (gfx1030). Measured 2026-09-06 TP4 cards 0-3:
 #   MTP=3 PIECEWISE: decode @3.7k 24.7 t/s, c1 79.9, c8 152.5
 #   (eager MTP=3: 10.5 t/s; eager no-MTP: 6.1)
+#   EP tested and rejected: --enable-expert-parallel loses on this PCIe
+#   host (19.4/-21% decode, 68.8/-14% c1, 129.2/-15% c8, greedy-clean) —
+#   matches the BM35 finding; keep experts TP-sharded.
 #
 # Required env:
 # - VLLM_PLE_MMAP=1: the ~82GB generated n-gram hash table lives in pinned

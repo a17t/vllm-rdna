@@ -80,7 +80,33 @@ def copy_ple_embedding_shard_(
 
 
 class PLEVocabParallelEmbedding(VocabParallelEmbedding):
-    """Vocab-parallel embedding that accepts checkpoint row shards."""
+    """Vocab-parallel embedding that accepts checkpoint row shards.
+
+    With ``VLLM_PLE_MMAP=1`` the n-gram table is moved to host memory
+    (zero-filled, pinned) after creation and looked up row-wise from the
+    PLE custom op, keeping ~20 GB/rank of VRAM free on 32 GB cards.
+    Checkpoints that ship ``ngram_embedding.shard_N`` rows still load
+    through the normal loader into the host table.
+    """
+
+    def __init__(self, *args, **kwargs):
+        import os
+
+        super().__init__(*args, **kwargs)
+        self.ple_host_resident = os.environ.get("VLLM_PLE_MMAP", "0") == "1"
+        if self.ple_host_resident:
+            from vllm.utils.torch_utils import (
+                get_accelerator_view_from_cpu_tensor,
+            )
+
+            host = torch.zeros_like(self.weight.data, device="cpu")
+            try:
+                host = host.pin_memory()
+            except RuntimeError:
+                pass
+            self._ple_host_weight = host
+            self.weight.data = get_accelerator_view_from_cpu_tensor(host)
+            self.weight._vllm_is_uva_offloaded = True
 
     def weight_loader(
         self,

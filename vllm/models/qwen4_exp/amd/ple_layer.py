@@ -1065,6 +1065,53 @@ class Qwen4ExpPLELayer(nn.Module, MambaBase):
         return gated_value.flatten(-2) + conv_output
 
 
+def _ple_ngram_host_embedding(layer: "Qwen4ExpPLELayer", ngram_ids: torch.Tensor):
+    """VLLM_PLE_MMAP path: masked row gather from the host-resident table.
+
+    Mirrors VocabParallelEmbedding.forward — each rank contributes its
+    local rows (others zeroed), then a TP all-reduce combines them. The
+    per-step H2D payload is [tokens, heads, head_dim] fp16 — a few KB.
+    Staging buffers are pinned so the GPU<->CPU copies are legal under
+    CUDA graph capture; they are (re)allocated only outside capture.
+    """
+    from vllm.distributed import tensor_model_parallel_all_reduce
+
+    emb = layer.ple_embedding.ngram_embedding
+    weight = getattr(emb, "_ple_host_weight", None)
+    if weight is None:
+        weight = emb.weight
+    shard = emb.shard_indices
+    mask = (ngram_ids >= shard.org_vocab_start_index) & (
+        ngram_ids < shard.org_vocab_end_index
+    )
+    local = (ngram_ids - shard.org_vocab_start_index).masked_fill(~mask, 0)
+    flat = local.reshape(-1)
+    total = flat.numel()
+
+    stage_ids = getattr(emb, "_ple_stage_ids", None)
+    if stage_ids is None or stage_ids.numel() < total:
+        if torch.cuda.is_current_stream_capturing():
+            raise RuntimeError("PLE mmap staging buffer too small at capture")
+        emb._ple_stage_ids = torch.empty(
+            total, dtype=torch.long, pin_memory=True
+        )
+        emb._ple_stage_rows = torch.empty(
+            total, weight.shape[1], dtype=weight.dtype, pin_memory=True
+        )
+        stage_ids = emb._ple_stage_ids
+
+    stage_ids[:total].copy_(flat, non_blocking=False)
+    rows_cpu = torch.embedding(weight, stage_ids[:total])
+    stage_rows = emb._ple_stage_rows[:total]
+    stage_rows.copy_(rows_cpu)
+    out = stage_rows.to(ngram_ids.device, non_blocking=True)
+    out = out.view(*ngram_ids.shape, weight.shape[1])
+    out = out * mask.unsqueeze(-1).to(out.dtype)
+    if emb.tp_size > 1:
+        out = tensor_model_parallel_all_reduce(out)
+    return out
+
+
 def qwen4_exp_amd_ple_ngram_embedding(
     ngram_ids: torch.Tensor,
     output: torch.Tensor,
@@ -1078,7 +1125,10 @@ def qwen4_exp_amd_ple_ngram_embedding(
     layer = get_forward_context().no_compile_layers[layer_name]
     if not isinstance(layer, Qwen4ExpPLELayer):
         raise TypeError(f"{layer_name} is not a Qwen4Exp PLE owner")
-    result = layer.ple_embedding.ngram_embedding(ngram_ids).flatten(-2)
+    if getattr(layer.ple_embedding.ngram_embedding, "ple_host_resident", False):
+        result = _ple_ngram_host_embedding(layer, ngram_ids).flatten(-2)
+    else:
+        result = layer.ple_embedding.ngram_embedding(ngram_ids).flatten(-2)
     output.copy_(result)
 
 

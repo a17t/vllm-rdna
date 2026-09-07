@@ -248,11 +248,18 @@ class RdnaAttentionImpl(AttentionImpl):
         # online-softmax split-K numerics differ enough from the fallback
         # path that spec-accept-rate collapses. Verify passes have
         # max_seqlen_q == num_spec+1 with few tokens per sequence.
-        _spec_q = int(os.environ.get("VLLM_FARDNA2_SPEC_VERIFY_Q_LEN", "3"))
-        if (max_seqlen_q == _spec_q
-                and num_actual_tokens <= 16 * seqused_k.size(0)):
-            raise NotImplementedError(
-                "RDNA_ATTN: MTP verify pass routed to fallback for numerics.")
+        # VLLM_FARDNA2_DISABLE_SPEC_GATE=1 bypasses this gate so cudagraph
+        # capture sizes > 32 (which walk the MTP-verify shape) can succeed.
+        _spec_gate_disabled = os.environ.get(
+            "VLLM_FARDNA2_DISABLE_SPEC_GATE", "0") == "1"
+        if not _spec_gate_disabled:
+            _spec_q = int(os.environ.get(
+                "VLLM_FARDNA2_SPEC_VERIFY_Q_LEN", "3"))
+            if (max_seqlen_q == _spec_q
+                    and num_actual_tokens <= 16 * seqused_k.size(0)):
+                raise NotImplementedError(
+                    "RDNA_ATTN: MTP verify pass routed to fallback "
+                    "for numerics.")
 
         fa = _get_fa_rdna2_module()
         sliding_window = (self.sliding_window[0] + 1
@@ -260,6 +267,11 @@ class RdnaAttentionImpl(AttentionImpl):
         paged_block_size = key_cache.shape[3]
 
         if max_seqlen_q <= 1:
+            # kv_splits=16: sweep 2026-09-04 showed s16 >= s8 at every
+            # (ctx, batch) cell for both D=256 geometries (Ornith
+            # H_q16/H_kv4, Qwen3.8-27B-rank H_q6/H_kv1); decode CTAs are
+            # few (B*H_q) so more splits = more occupancy, and the
+            # combine stage costs <10 us.
             out_paged = fa.fa_rdna2_decode_paged(
                 query[:num_actual_tokens],
                 key_cache,
@@ -267,7 +279,7 @@ class RdnaAttentionImpl(AttentionImpl):
                 block_table,
                 seqused_k,
                 paged_block_size,
-                kv_splits=8,
+                kv_splits=16,
                 sliding_window=sliding_window,
             )
         else:

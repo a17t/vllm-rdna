@@ -72,6 +72,29 @@ constexpr int LDS_PAD = 8;
 
 #if defined(__HIP__RDNA2__) || !defined(__HIP_DEVICE_COMPILE__)
 
+// gfx1030 has no native half atomicAdd; emulate with a CAS loop on the
+// containing aligned 32-bit word (same idea as atomic_add_pk4_f16).
+__forceinline__ __device__ void atomic_add_f16_cas(half* addr, half val) {
+  unsigned int* base = reinterpret_cast<unsigned int*>(
+      reinterpret_cast<size_t>(addr) & ~size_t(3));
+  const int shift = (reinterpret_cast<size_t>(addr) & 2) ? 16 : 0;
+  unsigned int old = *base;
+  unsigned int assumed;
+  do {
+    assumed = old;
+    half cur = __ushort_as_half(static_cast<unsigned short>(
+        (old >> shift) & 0xFFFFu));
+    half sum = __hadd(cur, val);
+    unsigned int new_word = (old & ~(0xFFFFu << shift)) |
+                            (static_cast<unsigned int>(
+                                 __half_as_ushort(sum))
+                             << shift);
+    old = atomicCAS(base, assumed, new_word);
+  } while (old != assumed);
+}
+
+
+
 // ---------------------------------------------------------------------------
 // Main AWQ prefill kernel.
 // ---------------------------------------------------------------------------
@@ -286,7 +309,7 @@ __global__ __launch_bounds__(THREADS) void gemm_awq_prefill_kernel(
           const int nc = n_col + j;
           if (nc >= size_n) continue;
           half v = __float2half_rn(acc[m][j]);
-          atomicAdd(c + g_m * size_n + nc, v);
+          atomic_add_f16_cas(c + g_m * size_n + nc, v);
         }
       } else {
         half2 v01 = __halves2half2(__float2half_rn(acc[m][0]),

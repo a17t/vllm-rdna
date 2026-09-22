@@ -201,6 +201,7 @@ def map_wna16_backend(runner_backend: MoEBackend) -> WNA16MoEBackend:
         "humming": WNA16MoEBackend.HUMMING,
         "flashinfer_trtllm": WNA16MoEBackend.FLASHINFER_TRTLLM,
         "emulation": WNA16MoEBackend.EMULATION,
+        "rdna2_w4a16": WNA16MoEBackend.RDNA2_W4A16,
     }
     if backend := mapping.get(runner_backend):
         return backend
@@ -1728,6 +1729,61 @@ def convert_to_wna16_moe_kernel_format(
             w2_qzeros,
             None,
             None,
+            w13_bias,
+            w2_bias,
+        )
+    elif backend == WNA16MoEBackend.RDNA2_W4A16:
+        # The RDNA2_W4A16 kernel (moe_gptq_gemm_rdna2) reads:
+        #   b_q_weight: [E, K/8, N] int32 (sequential nibbles along K)
+        #   b_scales  : [E, groups, N] fp16
+        #   b_qzeros  : [E, groups, N/8] int32 (sequential nibbles along N)
+        # RDNA2W4A16MoEExperts uses w1.shape[2] as N, so the layout must
+        # satisfy w1.view(...) being [E, K, N] (kernel-explicit K/8 is the
+        # packed-int32 view of the same data).
+        #
+        # Input from MoeWNA16 (N-first uint8 storage for w13 / w2):
+        #   w13_qweight : [E, N, K//2] uint8 (2 nibbles/byte, N-major)
+        #   w13_scales  : [E, N, groups] fp16 (N-major)
+        #   w13_qzeros  : [E, N//2, groups] uint8 (1 zero/byte, N-major)
+        # and analogous for w2 with N↔K swapped. After this branch:
+        #   w13 → [E, K//8, N] int32; scales → [E, groups, N]; qzeros →
+        #   [E, groups, N//8] int32. Same K-major treatment for w2.
+        #
+        # The bit ordering within each int32 is preserved by the simple
+        # uint8→int32 view: each byte holds 2 nibbles (low first, high
+        # second per AWQ convention), so 4 bytes packed sequentially
+        # along K give 8 sequential K-values at bit positions 0..28 — exactly
+        # what the kernel reads via (buf >> (j*4)) & 0xF for j=0..7.
+        w13_qweight_int32 = w13.view(torch.int32).transpose(1, 2).contiguous()
+        w2_qweight_int32 = w2.view(torch.int32).transpose(1, 2).contiguous()
+        w13_scales = w13_scale.transpose(1, 2).contiguous()
+        w2_scales = w2_scale.transpose(1, 2).contiguous()
+        if w13_qzeros is not None:
+            # [E, N//2, groups] uint8 → [E, groups, N//2] uint8 →
+            # [E, groups, N//8] int32 (each int32 = 4 sequential uint8 bytes
+            # = 4 N-columns of one group).
+            w13_qzeros = (
+                w13_qzeros.transpose(1, 2).contiguous().view(torch.int32)
+            )
+            w2_qzeros = (
+                w2_qzeros.transpose(1, 2).contiguous().view(torch.int32)
+            )
+        else:
+            w13_qzeros = None
+            w2_qzeros = None
+        return (
+            w13_qweight_int32,
+            w2_qweight_int32,
+            w13_scales,
+            w2_scales,
+            None,  # w13_g_idx
+            None,  # w2_g_idx
+            None,  # w13_g_idx_sort_indices
+            None,  # w2_g_idx_sort_indices
+            w13_qzeros,
+            w2_qzeros,
+            None,  # w13_input_global_scale
+            None,  # w2_input_global_scale
             w13_bias,
             w2_bias,
         )
